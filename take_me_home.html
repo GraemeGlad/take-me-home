@@ -43,26 +43,21 @@
             padding-bottom: 160px;
         }
 
-        #arrow-container {
-            width: 200px;
-            height: 200px;
-            position: relative;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            opacity: 0;
-            transition: opacity 0.5s ease-in-out;
-        }
-
-        #arrow {
-            width: 0;
-            height: 0;
-            border-left: 60px solid transparent;
-            border-right: 60px solid transparent;
-            border-bottom: 120px solid var(--arrow-color);
-            transform-origin: 50% 75%;
-            transition: transform 0.2s linear;
-        }
+       @media (max-width: 400px) {
+    #arrow-container {
+        width: 150px;
+        height: 150px;
+    }
+    #arrow {
+        border-left: 45px solid transparent;
+        border-right: 45px solid transparent;
+        border-bottom: 90px solid var(--arrow-color);
+    }
+    .button {
+        padding: 10px 20px;
+        font-size: 1rem;
+    }
+}
 
         #distance {
             position: absolute;
