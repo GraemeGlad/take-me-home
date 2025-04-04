@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Take Me Home</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --text-color: #e0e0e0;
+            --accent-color: #4CAF50;
+            --button-bg: #333;
+            --button-hover-bg: #555;
+            --arrow-color: var(--accent-color);
+            --status-error: #ff6b6b;
+        }
+
+        * {
+            box-sizing: border-box;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        html, body {
+            height: 100%;
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            display: flex;
+            flex-direction: column;
+            touch-action: manipulation;
+        }
+
+        #container {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            overflow: hidden;
+            padding-bottom: 160px;
+        }
+
+        #arrow-container {
+            width: 200px;
+            height: 200px;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+        }
+
+        #arrow {
+            width: 0;
+            height: 0;
+            border-left: 60px solid transparent;
+            border-right: 60px solid transparent;
+            border-bottom: 120px solid var(--arrow-color);
+            transform-origin: 50% 75%;
+            transition: transform 0.2s linear;
+        }
+
+        #distance {
+            position: absolute;
+            bottom: 10px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 1rem;
+            color: var(--text-color);
+            opacity: 0.7;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+            z-index: 10;
+        }
+
+        .button {
+            padding: 15px 30px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border: none;
+            border-radius: 8px;
+            background-color: var(--button-bg);
+            color: var(--text-color);
+            cursor: pointer;
+            width: 80%;
+            max-width: 300px;
+            text-align: center;
+            transition: background-color 0.2s ease;
+        }
+
+        .button:hover:not(:disabled) {
+            background-color: var(--button-hover-bg);
+        }
+        .button:active:not(:disabled) {
+            transform: scale(0.98);
+        }
+
+        .button#nav-toggle-button {
+            background-color: var(--accent-color);
+            color: #fff;
+        }
+        .button#nav-toggle-button.active {
+            background-color: #ff6b6b;
+        }
+
+        #status {
+            font-size: 0.9rem;
+            color: #aaa;
+            text-align: center;
+            min-height: 1.2em;
+            width: 90%;
+        }
+        #status.error {
+            color: var(--status-error);
+            font-weight: bold;
+        }
+
+        #permission-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 100;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 20px;
+            color: #fff;
+        }
+        #permission-overlay p {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="arrow-container">
+            <div id="arrow"></div>
+            <div id="distance">-- km</div>
+        </div>
+    </div>
+
+    <div id="controls">
+        <div id="status">Initializing...</div>
+        <button class="button" id="set-home-button">Set Current Location as Home</button>
+        <button class="button" id="nav-toggle-button">Take Me Home</button>
+    </div>
+
+    <div id="permission-overlay">
+        <p>This app needs access to your Location (Precise) and Motion & Orientation Sensors to work. <br><br>Please grant permission when prompted by your browser.</p>
+        <button class="button" id="request-perms-button" style="width:auto;">Request Permissions</button>
+    </div>
+
+    <script>
+        // --- DOM Elements ---
+        const setHomeButton = document.getElementById('set-home-button');
+        const navToggleButton = document.getElementById('nav-toggle-button');
+        const statusDiv = document.getElementById('status');
+        const arrowContainer = document.getElementById('arrow-container');
+        const arrow = document.getElementById('arrow');
+        const distanceDiv = document.getElementById('distance');
+        const permissionOverlay = document.getElementById('permission-overlay');
+        const requestPermsButton = document.getElementById('request-perms-button');
+
+        // --- State Variables ---
+        let homeCoords = null;
+        let currentCoords = null;
+        let currentHeading = null;
+        let isNavigating = false;
+        let geolocationWatchId = null;
+        let orientationListenerAttached = false;
+        let lastBearing = 0;
+        let orientationSupported = false;
+
+        // --- Constants ---
+        const STORAGE_KEY = 'takeMeHome_homeCoords';
+        const GEOLOCATION_OPTIONS = {
+            enableHighAccuracy: true,
+            maximumAge: 10000,
+            timeout: 15000
+        };
+
+        // --- Initialization ---
+        document.addEventListener('DOMContentLoaded', init);
+
+        function init() {
+            updateStatus('Loading...');
+            if (!checkAPIs()) {
+                return;
+            }
+
+            loadHomeLocation();
+            setupEventListeners();
+
+            updateStatus(homeCoords ? 'Home location loaded. Ready.' : 'Ready. Set Home location first.');
+            checkInitialPermissions();
+        }
+
+        function checkAPIs() {
+            let supported = true;
+            if (!navigator.geolocation) {
+                updateStatus('Error: Geolocation is not supported by this browser.', true);
+                supported = false;
+            }
+            if (!('DeviceOrientationEvent' in window)) {
+                console.warn("DeviceOrientationEvent not supported. Arrow direction will not work.");
+                orientationSupported = false;
+            } else {
+                orientationSupported = true;
+            }
+            if (!window.isSecureContext) {
+                updateStatus('Error: This app requires HTTPS or localhost to access sensors.', true);
+                console.error("App must be run in a Secure Context (HTTPS or localhost).");
+                if (setHomeButton) setHomeButton.disabled = true;
+                if (navToggleButton) navToggleButton.disabled = true;
+                supported = false;
+            }
+            return supported;
+        }
+
+        async function checkInitialPermissions() {
+            if (!('permissions' in navigator)) {
+                console.warn("Permissions API not supported, showing permission helper overlay.");
+                permissionOverlay.style.display = 'flex';
+                return;
+            }
+
+            try {
+                const geoStatus = await navigator.permissions.query({ name: 'geolocation' });
+                if (geoStatus.state === 'prompt' || geoStatus.state === 'denied') {
+                    console.warn("Initial permissions likely not granted. Showing helper overlay.");
+                    permissionOverlay.style.display = 'flex';
+                } else if (geoStatus.state === 'granted') {
+                    console.log("Initial permissions seem granted.");
+                    permissionOverlay.style.display = 'none';
+                }
+            } catch (error) {
+                console.error("Error querying permissions:", error);
+                permissionOverlay.style.display = 'flex';
+            }
+        }
+
+        function setupEventListeners() {
+            setHomeButton.addEventListener('click', setHomeLocation);
+            navToggleButton.addEventListener('click', toggleNavigation);
+            requestPermsButton.addEventListener('click', () => {
+                permissionOverlay.style.display = 'none';
+                if (!homeCoords) {
+                    setHomeLocation();
+                } else {
+                    toggleNavigation();
+                }
+            });
+        }
+
+        // --- Core Logic ---
+
+        function setHomeLocation() {
+            if (isNavigating) {
+                updateStatus('Stop navigation before setting a new home.', true);
+                return;
+            }
+            updateStatus('Getting current location...');
+            setHomeButton.disabled = true;
+
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    homeCoords = {
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude
+                    };
+                    saveHomeLocation();
+                    updateStatus(`Home set at: ${homeCoords.latitude.toFixed(5)}, ${homeCoords.longitude.toFixed(5)}`);
+                    console.log("Home location saved:", homeCoords);
+                    permissionOverlay.style.display = 'none';
+                    setHomeButton.disabled = false;
+                },
+                (error) => {
+                    handleLocationError(error);
+                    setHomeButton.disabled = false;
+                    if (error.code === error.PERMISSION_DENIED) {
+                        permissionOverlay.style.display = 'flex';
+                    }
+                },
+                GEOLOCATION_OPTIONS
+            );
+        }
+
+        function toggleNavigation() {
+            if (isNavigating) {
+                stopNavigation();
+            } else {
+                startNavigation();
+            }
+        }
+
+        function startNavigation() {
+            if (!homeCoords) {
+                updateStatus('Error: Set Home location first!', true);
+                return;
+            }
+
+            updateStatus('Starting navigation...');
+            navToggleButton.textContent = 'Stop Navigation';
+            navToggleButton.classList.add('active');
+            arrowContainer.style.opacity = 1;
+            isNavigating = true;
+            currentCoords = null;
+            currentHeading = null;
+            updateDistanceDisplay();
+
+            if (!geolocationWatchId) {
+                geolocationWatchId = navigator.geolocation.watchPosition(
+                    handleLocationUpdate,
+                    handleLocationError,
+                    GEOLOCATION_OPTIONS
+                );
+                console.log("Geolocation watching started (ID:", geolocationWatchId, ")");
+            }
+
+            requestAndAttachOrientationListener();
+        }
+
+        function requestAndAttachOrientationListener() {
+            if (!orientationSupported) {
+                updateStatus('Warning: Device orientation not supported. Arrow direction unavailable.', true);
+                return;
+            }
+
+            if (!orientationListenerAttached) {
+                if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    DeviceOrientationEvent.requestPermission()
+                        .then(permissionState => {
+                            if (permissionState === 'granted') {
+                                attachOrientationListener();
+                            } else {
+                                updateStatus('Error: Orientation sensor permission denied.', true);
+                                console.warn("Orientation permission denied.");
+                            }
+                        })
+                        .catch(error => {
+                            console.error("Error requesting orientation permission:", error);
+                            updateStatus('Error: Could not request orientation permission.', true);
+                            attachOrientationListener();
+                        });
+                } else {
+                    attachOrientationListener();
+                }
+            }
+        }
+
+        function attachOrientationListener() {
+            if (!orientationListenerAttached) {
+                if ('ondeviceorientationabsolute' in window) {
+                    window.addEventListener('deviceorientationabsolute', handleOrientation, true);
+                    console.log("Attached 'deviceorientationabsolute' listener.");
+                } else if ('ondeviceorientation' in window) {
+                    console.warn("Using 'deviceorientation' - may be affected by tilt.");
+                    window.addEventListener('deviceorientation', handleOrientation, true);
+                    console.log("Attached 'deviceorientation' listener.");
+                } else {
+                    updateStatus('Error: Device orientation sensor not detected.', true);
+                    console.error("No orientation events supported.");
+                }
+                orientationListenerAttached = true;
+            }
+        }
+
+        function stopNavigation() {
+            updateStatus(homeCoords ? 'Navigation stopped. Ready.' : 'Navigation stopped. Set Home.');
+            navToggleButton.textContent = 'Take Me Home';
+            navToggleButton.classList.remove('active');
+            arrowContainer.style.opacity = 0;
+            distanceDiv.textContent = "-- km";
+            isNavigating = false;
+
+            if (geolocationWatchId !== null) {
+                navigator.geolocation.clearWatch(geolocationWatchId);
+                geolocationWatchId = null;
+                console.log("Geolocation watching stopped.");
+            }
+
+            if (orientationListenerAttached) {
+                if ('ondeviceorientationabsolute' in window) {
+                    window.removeEventListener('deviceorientationabsolute', handleOrientation, true);
+                } else if ('ondeviceorientation' in window) {
+                    window.removeEventListener('deviceorientation', handleOrientation, true);
+                }
+                orientationListenerAttached = false;
+                console.log("Orientation listener removed.");
+            }
+            currentHeading = null;
+        }
+
+        function handleLocationUpdate(position) {
+            if (!isNavigating) return;
+
+            currentCoords = {
+                latitude: position.coords.latitude,
+                longitude: position.coords.longitude
+            };
+            updateDistanceDisplay();
+            updateArrowDirection();
+        }
+
+        function handleOrientation(event) {
+            if (!isNavigating) return;
+
+            let heading = event.alpha;
+            if (heading === null || typeof heading === 'undefined') {
+                console.warn("Received null heading data.");
+                return;
+            }
+
+            currentHeading = heading;
+            updateArrowDirection();
+        }
+
+        function updateArrowDirection() {
+            if (!isNavigating || !currentCoords || !homeCoords || currentHeading === null) {
+                return;
+            }
+
+            const bearing = calculateBearing(currentCoords.latitude, currentCoords.longitude, homeCoords.latitude, homeCoords.longitude);
+
+            if (Math.abs(bearing - lastBearing) < 1) {
+                return;
+            }
+            lastBearing = bearing;
+
+            let rotation = bearing - currentHeading;
+            rotation = (rotation + 360) % 360;
+
+            arrow.style.transform = `rotate(${rotation}deg)`;
+        }
+
+        // --- Calculations ---
+
+        function calculateBearing(lat1, lon1, lat2, lon2) {
+            const φ1 = toRadians(lat1);
+            const φ2 = toRadians(lat2);
+            const Δλ = toRadians(lon2 - lon1);
+
+            const y = Math.sin(Δλ) * Math.cos(φ2);
+            const x = Math.cos(φ1) * Math.sin(φ2) -
+                      Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+            let brng = Math.atan2(y, x);
+
+            brng = toDegrees(brng);
+            return (brng + 360) % 360;
+        }
+
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+            if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return null;
+
+            const R = 6371;
+            const φ1 = toRadians(lat1);
+            const φ2 = toRadians(lat2);
+            const Δφ = toRadians(lat2 - lat1);
+            const Δλ = toRadians(lon2 - lon1);
+
+            const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                      Math.cos(φ1) * Math.cos(φ2) *
+                      Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+            const distance = R * c;
+            return distance;
+        }
+
+        function updateDistanceDisplay() {
+            const distance = calculateDistance(currentCoords?.latitude, currentCoords?.longitude, homeCoords?.latitude, homeCoords?.longitude);
+            if (distance !== null) {
+                if (distance < 1) {
+                    distanceDiv.textContent = `${(distance * 1000).toFixed(0)} m`;
+                } else {
+                    distanceDiv.textContent = `${distance.toFixed(1)} km`;
+                }
+            } else {
+                distanceDiv.textContent = "-- km";
+            }
+        }
+
+        // --- Utility Functions ---
+
+        function toRadians(degrees) {
+            return degrees * Math.PI / 180;
+        }
+
+        function toDegrees(radians) {
+            return radians * 180 / Math.PI;
+        }
+
+        function loadHomeLocation() {
+            const storedCoords = localStorage.getItem(STORAGE_KEY);
+            if (storedCoords) {
+                try- {
+                    homeCoords = JSON.parse(storedCoords);
+                    console.log("Loaded home location from storage:", homeCoords);
+                } catch (e) {
+                    console.error("Failed to parse stored home location:", e);
+                    localStorage.removeItem(STORAGE_KEY);
+                }
+            }
+        }
+
+        function saveHomeLocation() {
+            if (homeCoords) {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(homeCoords));
+            }
+        }
+
+        function updateStatus(message, isError = false) {
+            if (!statusDiv) return;
+            statusDiv.textContent = message;
+            statusDiv.classList.toggle('error', isError);
+        }
+
+        function handleLocationError(error) {
+            console.error("Geolocation Error:", error.code, error.message);
+            let message = 'Error getting location.';
+            switch (error.code) {
+                case error.PERMISSION_DENIED:
+                    message = 'Error: Location permission denied.';
+                    break;
+                case error.POSITION_UNAVAILABLE:
+                    message = 'Error: Location information is unavailable.';
+                    break;
+                case error.TIMEOUT:
+                    message = 'Error: Location request timed out.';
+                    break;
+                default:
+                    message = `Error: An unknown location error occurred (${error.code}).`;
+            }
+            updateStatus(message, true);
+            if (isNavigating && (error.code === error.PERMISSION_DENIED || error.code === error.POSITION_UNAVAILABLE)) {
+                console.warn("Stopping navigation due to persistent location error.");
+                stopNavigation();
+            }
+        }
+    </script>
+</body>
+</html>
